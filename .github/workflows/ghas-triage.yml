@@ -1,0 +1,57 @@
+name: GHAS triage
+
+on:
+  schedule:
+    - cron: "0 15 * * 1"          # Mondays 8am Pacific
+  workflow_dispatch:
+    inputs:
+      backend:
+        description: "jev, laya, or jev,laya to compare"
+        default: jev
+        type: choice
+        options: [jev, laya, "jev,laya"]
+      limit:
+        description: "Max alerts per type (blank = all)"
+        required: false
+
+permissions:
+  contents: read
+  security-events: read
+
+jobs:
+  triage:
+    # Laya must be reachable from the runner. For a Laya server on your machine/LAN,
+    # switch to a self-hosted runner: runs-on: [self-hosted]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: Triage open alerts
+        env:
+          # Inputs go through env, never interpolated into the script (avoids injection).
+          BACKEND: ${{ inputs.backend || vars.TRIAGE_BACKEND || 'jev' }}
+          LIMIT: ${{ inputs.limit }}
+          REPO: ${{ github.repository }}
+          # Fine-grained PAT / GitHub App token with read access to code scanning,
+          # secret scanning, Dependabot alerts, and contents. GITHUB_TOKEN alone only
+          # covers code scanning.
+          GITHUB_TOKEN: ${{ secrets.GHAS_READ_TOKEN || github.token }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          LAYA_BASE_URL: ${{ vars.LAYA_BASE_URL }}
+          LAYA_API_KEY: ${{ secrets.LAYA_API_KEY }}
+        run: |
+          args=(--repo "$REPO" --backend "$BACKEND" --out triage)
+          if [ -n "$LIMIT" ]; then args+=(--limit "$LIMIT"); fi
+          python -m ghas_triage "${args[@]}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ghas-triage-report
+          path: triage.*
